@@ -1,5 +1,4 @@
 //
-// Created by andesson on 18/05/25.
 
 #include "../include/service.h"
 
@@ -27,13 +26,14 @@ void *client_handler(void *arg) {
 
     char buffer[MAXMSG];
     ssize_t bytes_read;
+    char sender_nick[32] = "Desconhecido";
 
     add_client(client_sockfd);
 
     while ((bytes_read = recv(client_sockfd, buffer, MAXMSG - 1, 0)) > 0) {
         buffer[bytes_read] = '\0';
 
-        // Buscar nickname do remetente uma única vez para esta iteração
+        // Buscar nickname do remetente para garantir que temos o mais atual
         char sender_nick[32] = "Desconhecido";
         pthread_mutex_lock(&clients_lock);
         client_node_t *curr = clients;
@@ -48,7 +48,11 @@ void *client_handler(void *arg) {
 
         // Comando /nick
         if (strncmp(buffer, "/nick ", 6) == 0) {
-            set_client_nickname(client_sockfd, buffer + 6);
+            char *new_nick = buffer + 6;
+            new_nick[strcspn(new_nick, "\r\n")] = '\0';
+            if (strlen(new_nick) > 0) {
+                set_client_nickname(client_sockfd, new_nick);
+            }
             continue;
         }
 
@@ -58,6 +62,7 @@ void *client_handler(void *arg) {
             client_node_t *curr = clients;
             while (curr && curr->sockfd != client_sockfd) curr = curr->next;
             if (curr) strncpy(curr->room, DEFAULT_ROOM, sizeof(curr->room) - 1);
+            if (curr) curr->room[sizeof(curr->room) - 1] = '\0';
             pthread_mutex_unlock(&clients_lock);
 
             send(client_sockfd, "[SISTEMA] Você voltou para a sala Geral.\n", 41, 0);
@@ -73,6 +78,7 @@ void *client_handler(void *arg) {
             client_node_t *curr = clients;
             while (curr && curr->sockfd != client_sockfd) curr = curr->next;
             if (curr) strncpy(curr->room, new_room, sizeof(curr->room) - 1);
+            if (curr) curr->room[sizeof(curr->room) - 1] = '\0';
             pthread_mutex_unlock(&clients_lock);
 
             char join_msg[64];
