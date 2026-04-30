@@ -5,9 +5,11 @@
 void *server_input_handler(void *arg) {
     char buffer[MAXMSG];
     while (fgets(buffer, MAXMSG, stdin)) {
-        buffer[strcspn(buffer, "\n")] = '\0';
-        log_with_timestamp(buffer);
-        broadcast_message(-1, buffer);
+        buffer[strcspn(buffer, "\n")] = '\0'; // Remove newline character
+        if (strlen(buffer) > 0) { // Only log and broadcast if the message is not empty
+            log_with_timestamp(buffer);
+            broadcast_message(-1, buffer);
+        }
     }
     return NULL;
 }
@@ -22,36 +24,27 @@ void *client_handler(void *arg) {
                          " Use o comando /join <sala> para entrar em uma sala.\n"
                          " Use o comando /leave para voltar à sala Geral.\n"
                          " Use o comando /msg <apelido> <mensagem> para enviar mensagens privadas.\n\n";
-    send(client_sockfd, welcome_msg, strlen(welcome_msg), 0);
+    send(client_sockfd, welcome_msg, strlen(welcome_msg), MSG_NOSIGNAL);
 
     char buffer[MAXMSG];
     ssize_t bytes_read;
-    char sender_nick[32] = "Desconhecido";
+    char sender_nick[32];
+    strncpy(sender_nick, "Anonimo", sizeof(sender_nick) - 1);
+    sender_nick[sizeof(sender_nick) - 1] = '\0';
 
     add_client(client_sockfd);
 
     while ((bytes_read = recv(client_sockfd, buffer, MAXMSG - 1, 0)) > 0) {
         buffer[bytes_read] = '\0';
 
-        // Buscar nickname do remetente para garantir que temos o mais atual
-        char sender_nick[32] = "Desconhecido";
-        pthread_mutex_lock(&clients_lock);
-        client_node_t *curr = clients;
-        while (curr) {
-            if (curr->sockfd == client_sockfd) {
-                if (strlen(curr->nickname) > 0) strncpy(sender_nick, curr->nickname, sizeof(sender_nick));
-                break;
-            }
-            curr = curr->next;
-        }
-        pthread_mutex_unlock(&clients_lock);
-
         // Comando /nick
         if (strncmp(buffer, "/nick ", 6) == 0) {
             char *new_nick = buffer + 6;
             new_nick[strcspn(new_nick, "\r\n")] = '\0';
-            if (strlen(new_nick) > 0) {
-                set_client_nickname(client_sockfd, new_nick);
+
+            if (set_client_nickname(client_sockfd, new_nick)) {
+                strncpy(sender_nick, new_nick, sizeof(sender_nick) - 1);
+                sender_nick[sizeof(sender_nick) - 1] = '\0';
             }
             continue;
         }
@@ -61,11 +54,15 @@ void *client_handler(void *arg) {
             pthread_mutex_lock(&clients_lock);
             client_node_t *curr = clients;
             while (curr && curr->sockfd != client_sockfd) curr = curr->next;
-            if (curr) strncpy(curr->room, DEFAULT_ROOM, sizeof(curr->room) - 1);
-            if (curr) curr->room[sizeof(curr->room) - 1] = '\0';
+            if (curr) {
+                memset(curr->room, 0, sizeof(curr->room));
+                strncpy(curr->room, DEFAULT_ROOM, sizeof(curr->room) - 1);
+                curr->room[sizeof(curr->room) - 1] = '\0';
+            }
             pthread_mutex_unlock(&clients_lock);
 
-            send(client_sockfd, "[SISTEMA] Você voltou para a sala Geral.\n", 41, 0);
+            char msg[] = "[SISTEMA] Você voltou para a sala Geral.\n";
+            send(client_sockfd, msg, strlen(msg), MSG_NOSIGNAL);
             continue;
         }
 
@@ -73,17 +70,26 @@ void *client_handler(void *arg) {
         if (strncmp(buffer, "/join ", 6) == 0) {
             char *new_room = buffer + 6;
             new_room[strcspn(new_room, "\r\n")] = '\0';
+
+            if (strlen(new_room) == 0) {
+                char err[] = "[ERRO] Nome da sala inválido.\n";
+                send(client_sockfd, err, strlen(err), MSG_NOSIGNAL);
+                continue;
+            }
             
             pthread_mutex_lock(&clients_lock);
             client_node_t *curr = clients;
             while (curr && curr->sockfd != client_sockfd) curr = curr->next;
-            if (curr) strncpy(curr->room, new_room, sizeof(curr->room) - 1);
-            if (curr) curr->room[sizeof(curr->room) - 1] = '\0';
+            if (curr) {
+                memset(curr->room, 0, sizeof(curr->room));
+                strncpy(curr->room, new_room, sizeof(curr->room) - 1);
+                curr->room[sizeof(curr->room) - 1] = '\0';
+            }
             pthread_mutex_unlock(&clients_lock);
 
             char join_msg[64];
             snprintf(join_msg, sizeof(join_msg), "[SISTEMA] Você entrou na sala: %s\n", new_room);
-            send(client_sockfd, join_msg, strlen(join_msg), 0);
+            send(client_sockfd, join_msg, strlen(join_msg), MSG_NOSIGNAL);
             continue;
         }
 
@@ -96,17 +102,15 @@ void *client_handler(void *arg) {
                 const char *private_msg = space + 1;
 
                 // Remover quebra de linha da mensagem privada
-                char clean_msg[MAXMSG];
-                strncpy(clean_msg, private_msg, sizeof(clean_msg) - 1);
-                clean_msg[sizeof(clean_msg) - 1] = '\0';
-                clean_msg[strcspn(clean_msg, "\r\n")] = '\0';
-
+                char *msg_ptr = (char *)private_msg;
+                msg_ptr[strcspn(msg_ptr, "\r\n")] = '\0';
+                
                 // Buscar socket do destinatário
                 int recipient_sockfd = -1;
                 pthread_mutex_lock(&clients_lock);
                 client_node_t *curr = clients;
                 while (curr) {
-                    if (strcmp(curr->nickname, recipient_nick) == 0) {
+                    if (strcasecmp(curr->nickname, recipient_nick) == 0) {
                         recipient_sockfd = curr->sockfd;
                         break;
                     }
@@ -116,33 +120,42 @@ void *client_handler(void *arg) {
 
                 if (recipient_sockfd != -1) {
                     char final_msg[MAXMSG + 64];
-                    snprintf(final_msg, sizeof(final_msg), "[Privado] @%s: %s", sender_nick, clean_msg);
-                    send(recipient_sockfd, final_msg, strlen(final_msg), 0);
+                    snprintf(final_msg, sizeof(final_msg), "[Privado] @%s: %s\n", sender_nick, msg_ptr);
+                    send(recipient_sockfd, final_msg, strlen(final_msg), MSG_NOSIGNAL);
 
                     // Logar a mensagem privada
-                    save_message_to_log(sender_nick, clean_msg, "private");
+                    save_message_to_log(sender_nick, msg_ptr, "private");
                 } else {
                     char error_msg[] = "[ERRO] Usuário não encontrado.\n";
-                    send(client_sockfd, error_msg, strlen(error_msg), 0);
+                    send(client_sockfd, error_msg, strlen(error_msg), MSG_NOSIGNAL);
                 }
+                continue;
+            } else {
+                char error_msg[] = "[ERRO] Use: /msg <apelido> <mensagem>\n";
+                send(client_sockfd, error_msg, strlen(error_msg), MSG_NOSIGNAL);
                 continue;
             }
         }
 
         // Remover quebra de linha da mensagem pública
         buffer[strcspn(buffer, "\r\n")] = '\0';
+        if (strlen(buffer) == 0) continue;
 
-        // Montar mensagem formatada
+        // Montar mensagem formatada para broadcast
         char final_msg[MAXMSG + 64];
-        snprintf(final_msg, sizeof(final_msg), "@%s: %s", sender_nick, buffer);
+        snprintf(final_msg, sizeof(final_msg), "@%s: %s\n", sender_nick, buffer);
+        broadcast_message(client_sockfd, final_msg);  
+    }
 
-        // Enviar mensagem (o broadcast ja faz o log_with_timestamp e save_message_to_log)
-        broadcast_message(client_sockfd, buffer);  
+    if (bytes_read == -1) {
+        char err_log[64];
+        snprintf(err_log, sizeof(err_log), "[ERRO] Socket error com cliente @%s", sender_nick);
+        log_with_timestamp(err_log);
     }
 
     // Notificar outros usuários que o cliente saiu
-    char exit_msg[64];
-    snprintf(exit_msg, sizeof(exit_msg), CLR_YELLOW "[INFO] @%s saiu do servidor." CLR_RESET, sender_nick);
+    char exit_msg[128];
+    snprintf(exit_msg, sizeof(exit_msg), CLR_YELLOW "[INFO] @%s saiu do servidor.\n" CLR_RESET, sender_nick);
     log_with_timestamp(exit_msg);
     broadcast_message(-1, exit_msg);
 
