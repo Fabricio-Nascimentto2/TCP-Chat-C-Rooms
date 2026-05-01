@@ -123,6 +123,11 @@ void *client_handler(void *arg) {
                     snprintf(final_msg, sizeof(final_msg), "[Privado] @%s: %s\n", sender_nick, msg_ptr);
                     send(recipient_sockfd, final_msg, strlen(final_msg), MSG_NOSIGNAL);
 
+                    // Enviar confirmação para o próprio remetente
+                    char confirm_msg[MAXMSG + 64];
+                    snprintf(confirm_msg, sizeof(confirm_msg), "[Para @%s]: %s\n", recipient_nick, msg_ptr);
+                    send(client_sockfd, confirm_msg, strlen(confirm_msg), MSG_NOSIGNAL);
+
                     // Logar a mensagem privada
                     save_message_to_log(sender_nick, msg_ptr, "private");
                 } else {
@@ -141,14 +146,12 @@ void *client_handler(void *arg) {
         buffer[strcspn(buffer, "\r\n")] = '\0';
         if (strlen(buffer) == 0) continue;
 
-        // Montar mensagem formatada para broadcast
-        char final_msg[MAXMSG + 64];
-        snprintf(final_msg, sizeof(final_msg), "@%s: %s\n", sender_nick, buffer);
-        broadcast_message(client_sockfd, final_msg);  
+        // Envia apenas o buffer. O broadcast_message já cuida da formatação com cores e apelido.
+        broadcast_message(client_sockfd, buffer);  
     }
 
     if (bytes_read == -1) {
-        char err_log[64];
+        char err_log[128];
         snprintf(err_log, sizeof(err_log), "[ERRO] Socket error com cliente @%s", sender_nick);
         log_with_timestamp(err_log);
     }

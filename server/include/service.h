@@ -1,4 +1,4 @@
-// Created by andesson on 07/05/25.
+// 
 
 #ifndef SERVER_H
 #define SERVER_H
@@ -45,7 +45,7 @@ extern int sockfd;
 // client
 void add_client(int client_sockfd);
 void remove_client(int client_sockfd);
-void set_client_nickname(int sockfd, const char *nickname);
+int set_client_nickname(int sockfd, const char *nickname);
 int is_nickname_taken(const char *nickname);
 
 // broadcast
