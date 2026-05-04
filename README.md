@@ -1,6 +1,6 @@
 # ⚡ cli-chat-server
 
-> Um servidor de chat TCP robusto, multithread e direto no terminal — rápido, leve e sem frescura.
+> Um servidor de chat TCP robusto, multithread e direto no terminal.
 > Desenvolvido em **C** para ambientes Linux.
 
 ---
